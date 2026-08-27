@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node server.js",
+    "import": "node import-csv.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {

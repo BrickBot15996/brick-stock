@@ -20,11 +20,30 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     quantity INTEGER NOT NULL DEFAULT 0 CHECK (quantity >= 0),
-    status TEXT NOT NULL DEFAULT 'AVAILABLE' CHECK (status IN ('AVAILABLE', 'IN_USE', 'BROKEN')),
+    status TEXT NOT NULL DEFAULT 'AVAILABLE' CHECK (status IN ('AVAILABLE', 'IN_USE', 'BROKEN', 'IN_SHIPMENT')),
     location TEXT,
     type_id INTEGER REFERENCES types(id)
   )
 `);
+
+const partsSchema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'parts'").get();
+if (partsSchema && !partsSchema.sql.includes("'IN_SHIPMENT'")) {
+  db.exec(`
+    ALTER TABLE parts RENAME TO parts_old;
+    CREATE TABLE parts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 0 CHECK (quantity >= 0),
+      status TEXT NOT NULL DEFAULT 'AVAILABLE' CHECK (status IN ('AVAILABLE', 'IN_USE', 'BROKEN', 'IN_SHIPMENT')),
+      location TEXT,
+      type_id INTEGER REFERENCES types(id)
+    );
+    INSERT INTO parts (id, name, quantity, status, location, type_id)
+      SELECT id, name, quantity, status, location, type_id FROM parts_old;
+    DROP TABLE parts_old;
+  `);
+  console.log('Migrated: added IN_SHIPMENT status support');
+}
 
 // --- Migration: add type_id to a parts table that already existed before this change ---
 const columns = db.prepare("PRAGMA table_info(parts)").all();

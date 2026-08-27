@@ -1,12 +1,26 @@
 // server.js
 const express = require('express');
 const db = require('./db/database');
+const { importCsvText } = require('./import-csv');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(express.static('public'));
+
+app.post('/api/import/csv', (req, res) => {
+  if (!req.body || typeof req.body.csv !== 'string') {
+    return res.status(400).json({ error: 'csv must be provided as a string' });
+  }
+
+  try {
+    const imported = importCsvText(req.body.csv);
+    res.status(201).json({ imported });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
 
 const VALID_STATUSES = ['AVAILABLE', 'IN_USE', 'BROKEN', 'IN_SHIPMENT'];
 
@@ -136,11 +150,63 @@ app.put('/api/parts/:id', (req, res) => {
     location: location !== undefined ? location : existing.location,
   };
 
+  const mergeTarget = db.prepare(
+    `SELECT * FROM parts
+     WHERE id != ? AND name = ? COLLATE NOCASE AND status = ? AND type_id IS ?`
+  ).get(req.params.id, updated.name, updated.status, typeId);
+
+  if (mergeTarget) {
+    const mergeTransaction = db.transaction(() => {
+      db.prepare('UPDATE parts SET quantity = quantity + ? WHERE id = ?')
+        .run(updated.quantity, mergeTarget.id);
+      db.prepare('DELETE FROM parts WHERE id = ?').run(req.params.id);
+      return db.prepare(`${PART_SELECT} WHERE parts.id = ?`).get(mergeTarget.id);
+    });
+    return res.json({ merged: true, part: mergeTransaction() });
+  }
+
   db.prepare(
     'UPDATE parts SET name = ?, quantity = ?, status = ?, location = ?, type_id = ? WHERE id = ?'
   ).run(updated.name, updated.quantity, updated.status, updated.location, typeId, req.params.id);
 
-  res.json(db.prepare(`${PART_SELECT} WHERE parts.id = ?`).get(req.params.id));
+  res.json({ merged: false, part: db.prepare(`${PART_SELECT} WHERE parts.id = ?`).get(req.params.id) });
+});
+
+app.post('/api/parts/:id/split', (req, res) => {
+  const existing = db.prepare('SELECT * FROM parts WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Part not found' });
+
+  const quantity = Number(req.body.quantity);
+  const status = req.body.status || existing.status;
+  const location = req.body.location === undefined ? existing.location : req.body.location;
+  const type = req.body.type === undefined ? existing.type_id : req.body.type;
+
+  if (!Number.isInteger(quantity) || quantity <= 0 || quantity >= existing.quantity) {
+    return res.status(400).json({ error: `quantity must be greater than 0 and less than ${existing.quantity}` });
+  }
+  if (!VALID_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `status must be one of ${VALID_STATUSES.join(', ')}` });
+  }
+
+  let typeId = type;
+  if (typeof type === 'string' || type === null) {
+    const typeResult = resolveTypeId(type);
+    if (!typeResult.ok) return res.status(400).json({ error: typeResult.error });
+    typeId = typeResult.typeId;
+  }
+
+  const splitTransaction = db.transaction(() => {
+    db.prepare('UPDATE parts SET quantity = quantity - ? WHERE id = ?').run(quantity, req.params.id);
+    const info = db.prepare(
+      'INSERT INTO parts (name, quantity, status, location, type_id) VALUES (?, ?, ?, ?, ?)'
+    ).run(existing.name, quantity, status, location || null, typeId);
+    return {
+      source: db.prepare(`${PART_SELECT} WHERE parts.id = ?`).get(req.params.id),
+      created: db.prepare(`${PART_SELECT} WHERE parts.id = ?`).get(info.lastInsertRowid),
+    };
+  });
+
+  res.status(201).json(splitTransaction());
 });
 
 app.delete('/api/parts/:id', (req, res) => {

@@ -31,8 +31,25 @@
       </div>
     </div>
     <div class="toolbar-right">
+      <button class="secondary" id="toggleImportBtn">Import CSV</button>
       <button class="secondary" id="manageTagsBtn">🏷️ Manage Tags</button>
       <button class="primary" id="togglePanelBtn">+ Add Part</button>
+    </div>
+  </div>
+
+  <div class="panel" id="importPanel">
+    <h2>Import Stock CSV</h2>
+    <div class="error-msg" id="importError"></div>
+    <div class="import-form">
+      <div class="field">
+        <label for="csvFile">CSV file</label>
+        <input type="file" id="csvFile" accept=".csv,text/csv">
+      </div>
+      <p class="import-hint">Required columns: NAME and QTY. Optional columns: ID, TAG, Status.</p>
+    </div>
+    <div class="panel-actions">
+      <button class="ghost" id="cancelImportBtn">Cancel</button>
+      <button class="primary" id="submitImportBtn">Import CSV</button>
     </div>
   </div>
 
@@ -89,7 +106,43 @@
     </div>
     <div class="tag-list" id="modalTagList"></div>
     <div style="text-align: right;">
+      <button class="secondary" id="addTagModalBtn">+ Add Tag</button>
       <button class="ghost" id="closeTagModalGhostBtn">Done</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="splitModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Split Stock</h3>
+      <button class="close-modal" id="closeSplitModalBtn">✕</button>
+    </div>
+    <div class="error-msg" id="splitError"></div>
+    <div class="field">
+      <label for="splitQuantity">Quantity to move</label>
+      <input type="number" id="splitQuantity" min="1" value="1">
+    </div>
+    <div class="field">
+      <label for="splitStatus">New status</label>
+      <select id="splitStatus">
+        <option value="AVAILABLE">Available</option>
+        <option value="IN_USE">In Use</option>
+        <option value="BROKEN">Broken</option>
+        <option value="IN_SHIPMENT">In Shipment</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="splitType">New tag</label>
+      <select id="splitType"></select>
+    </div>
+    <div class="field">
+      <label for="splitLocation">New location</label>
+      <input type="text" id="splitLocation" placeholder="e.g. Robot 1">
+    </div>
+    <div class="panel-actions">
+      <button class="ghost" id="cancelSplitBtn">Cancel</button>
+      <button class="primary" id="submitSplitBtn">Split Stock</button>
     </div>
   </div>
 </div>

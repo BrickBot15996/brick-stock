@@ -6,12 +6,20 @@ let activeFilter = 'ALL';
 const tagGrid = document.getElementById('tagGrid');
 const addPanel = document.getElementById('addPanel');
 const addError = document.getElementById('addError');
+const importPanel = document.getElementById('importPanel');
+const importError = document.getElementById('importError');
 const searchInput = document.getElementById('searchInput');
 const tagModal = document.getElementById('tagModal');
 const modalTagList = document.getElementById('modalTagList');
+const splitModal = document.getElementById('splitModal');
+const splitError = document.getElementById('splitError');
+let splitPartId = null;
 
 // ---------- Data loading ----------
-async function loadTypes() {
+async function loadTypes(selectedType = null) {
+  const select = document.getElementById('f-type');
+  const currentVal = selectedType || select.value;
+
   try {
     const res = await fetch(`${API}/types`);
     allTypes = await res.json();
@@ -21,8 +29,6 @@ async function loadTypes() {
     }
   }
   
-  const select = document.getElementById('f-type');
-  const currentVal = select.value;
   select.innerHTML = '<option value="">— none —</option>' +
     allTypes.map(t => `<option value="${escapeAttr(t.name)}">${escapeHtml(t.name)}</option>`).join('');
   
@@ -109,6 +115,7 @@ function renderParts() {
 
   filtered.forEach(p => {
     document.getElementById(`edit-btn-${p.id}`).addEventListener('click', () => toggleEdit(p.id, true));
+    document.getElementById(`split-btn-${p.id}`).addEventListener('click', () => openSplitModal(p));
     document.getElementById(`cancel-btn-${p.id}`).addEventListener('click', () => toggleEdit(p.id, false));
     document.getElementById(`save-btn-${p.id}`).addEventListener('click', () => saveEdit(p.id));
     document.getElementById(`delete-btn-${p.id}`).addEventListener('click', () => deletePart(p.id, p.name));
@@ -136,6 +143,7 @@ function renderTag(p) {
         <div class="tag-location">📍 ${p.location ? escapeHtml(p.location) : 'Unassigned'}</div>
         <div class="tag-actions">
           <button id="edit-btn-${p.id}">Edit</button>
+          <button id="split-btn-${p.id}">Split</button>
           <button class="delete" id="delete-btn-${p.id}">Delete</button>
         </div>
       </div>
@@ -174,6 +182,52 @@ function toggleEdit(id, on) {
   document.getElementById(`tag-${id}`).classList.toggle('editing', on);
 }
 
+function openSplitModal(part) {
+  splitPartId = part.id;
+  splitError.classList.remove('show');
+  document.getElementById('splitQuantity').value = 1;
+  document.getElementById('splitQuantity').max = part.quantity - 1;
+  document.getElementById('splitStatus').value = part.status;
+  document.getElementById('splitLocation').value = part.location || '';
+  document.getElementById('splitType').innerHTML = '<option value="">— none —</option>' +
+    allTypes.map(t => `<option value="${escapeAttr(t.name)}" ${t.name === part.type ? 'selected' : ''}>${escapeHtml(t.name)}</option>`).join('');
+  splitModal.classList.add('open');
+}
+
+function closeSplitModal() {
+  splitModal.classList.remove('open');
+  splitPartId = null;
+}
+
+async function submitSplit() {
+  splitError.classList.remove('show');
+  const body = {
+    quantity: Number(document.getElementById('splitQuantity').value),
+    status: document.getElementById('splitStatus').value,
+    type: document.getElementById('splitType').value || null,
+    location: document.getElementById('splitLocation').value.trim() || null,
+  };
+
+  try {
+    const res = await fetch(`${API}/parts/${splitPartId}/split`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Split failed.');
+
+    const sourceIndex = allParts.findIndex(p => p.id === splitPartId);
+    if (sourceIndex !== -1) allParts[sourceIndex] = result.source;
+    allParts.push(result.created);
+    closeSplitModal();
+    renderParts();
+  } catch (error) {
+    splitError.textContent = error.message;
+    splitError.classList.add('show');
+  }
+}
+
 // ---------- Mutations ----------
 async function saveEdit(id) {
   const body = {
@@ -189,6 +243,15 @@ async function saveEdit(id) {
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error('API error');
+    const result = await res.json();
+    const updatedPart = result.part;
+    const idx = allParts.findIndex(p => p.id === id);
+    if (result.merged) {
+      allParts = allParts.filter(p => p.id !== id && p.id !== updatedPart.id);
+      allParts.push(updatedPart);
+    } else if (idx !== -1) {
+      allParts[idx] = updatedPart;
+    }
   } catch (e) {
     const idx = allParts.findIndex(p => p.id === id);
     if(idx !== -1) allParts[idx] = { ...allParts[idx], ...body };
@@ -200,7 +263,9 @@ async function saveEdit(id) {
 async function deletePart(id, name) {
   if (!confirm(`Remove "${name}" from the stockroom? This can't be undone.`)) return;
   try {
-    await fetch(`${API}/parts/${id}`, { method: 'DELETE' });
+    const res = await fetch(`${API}/parts/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('API error');
+    allParts = allParts.filter(p => p.id !== id);
   } catch (e) {
     allParts = allParts.filter(p => p.id !== id);
   }
@@ -230,6 +295,7 @@ async function submitNewPart() {
       body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error('API error');
+    allParts.push(await res.json());
   } catch (e) {
     payload.id = Date.now();
     allParts.push(payload);
@@ -237,6 +303,46 @@ async function submitNewPart() {
 
   closePanel();
   renderParts();
+}
+
+function openImportPanel() {
+  importPanel.classList.add('open');
+  importError.classList.remove('show');
+}
+
+function closeImportPanel() {
+  importPanel.classList.remove('open');
+  document.getElementById('csvFile').value = '';
+  importError.classList.remove('show');
+}
+
+async function submitCsvImport() {
+  importError.classList.remove('show');
+  const file = document.getElementById('csvFile').files[0];
+
+  if (!file) {
+    importError.textContent = 'Choose a CSV file first.';
+    importError.classList.add('show');
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API}/import/csv`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ csv: await file.text() }),
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Import failed.');
+
+    closeImportPanel();
+    await loadTypes();
+    await loadParts();
+    alert(`Imported ${result.imported} part(s).`);
+  } catch (error) {
+    importError.textContent = error.message;
+    importError.classList.add('show');
+  }
 }
 
 async function addNewType() {
@@ -250,14 +356,13 @@ async function addNewType() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: trimmed }),
     });
-    if (!res.ok) throw new Error();
-    await loadTypes();
+    if (!res.ok) throw new Error('API error');
+    const createdType = await res.json();
+    await loadTypes(createdType.name);
   } catch (e) {
     allTypes.push({ id: Date.now(), name: trimmed });
-    await loadTypes();
+    await loadTypes(trimmed);
   }
-  
-  document.getElementById('f-type').value = trimmed;
 }
 
 // ---------- Panel & Modal controls ----------
@@ -303,11 +408,18 @@ function escapeAttr(str) { return escapeHtml(str); }
 document.getElementById('togglePanelBtn').addEventListener('click', openPanel);
 document.getElementById('cancelAddBtn').addEventListener('click', closePanel);
 document.getElementById('submitAddBtn').addEventListener('click', submitNewPart);
+document.getElementById('toggleImportBtn').addEventListener('click', openImportPanel);
+document.getElementById('cancelImportBtn').addEventListener('click', closeImportPanel);
+document.getElementById('submitImportBtn').addEventListener('click', submitCsvImport);
 document.getElementById('newTypeBtn').addEventListener('click', addNewType);
 
 document.getElementById('manageTagsBtn').addEventListener('click', openTagModal);
+document.getElementById('addTagModalBtn').addEventListener('click', addNewType);
 document.getElementById('closeTagModalBtn').addEventListener('click', closeTagModal);
 document.getElementById('closeTagModalGhostBtn').addEventListener('click', closeTagModal);
+document.getElementById('closeSplitModalBtn').addEventListener('click', closeSplitModal);
+document.getElementById('cancelSplitBtn').addEventListener('click', closeSplitModal);
+document.getElementById('submitSplitBtn').addEventListener('click', submitSplit);
 
 // ---------- Init ----------
 (async function init() {

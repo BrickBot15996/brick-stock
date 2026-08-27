@@ -1,0 +1,24 @@
+# Database (local data — don't commit)
+inventory.db
+inventory.db-journal
+inventory.db-wal
+inventory.db-shm
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+

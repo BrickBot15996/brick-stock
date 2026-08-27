@@ -8,7 +8,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static('public'));
 
-const VALID_STATUSES = ['AVAILABLE', 'IN_USE', 'BROKEN'];
+const VALID_STATUSES = ['AVAILABLE', 'IN_USE', 'BROKEN', 'IN_SHIPMENT'];
 
 function resolveTypeId(typeName) {
   // Returns { ok: true, typeId } or { ok: false, error }

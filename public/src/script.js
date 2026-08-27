@@ -42,7 +42,8 @@ async function loadParts() {
       allParts = [
         { id: 1, name: 'Rev Core Hex Motor', quantity: 4, status: 'AVAILABLE', location: 'Bin A1', type: 'Motor' },
         { id: 2, name: 'Color Sensor V3', quantity: 2, status: 'IN_USE', location: 'Robot 1', type: 'Sensor' },
-        { id: 3, name: 'Omni Wheel 90mm', quantity: 0, status: 'BROKEN', location: 'Bin C4', type: 'Wheel' }
+        { id: 3, name: 'Omni Wheel 90mm', quantity: 0, status: 'BROKEN', location: 'Bin C4', type: 'Wheel' },
+        { id: 4, name: 'Omni 67 90mm', quantity: 34, status: 'IN_SHIPMENT', location: '', type: 'Wheel' }
       ];
     }
   }
@@ -115,7 +116,7 @@ function renderParts() {
 }
 
 function renderTag(p) {
-  const statusLabel = { AVAILABLE: 'Available', IN_USE: 'In Use', BROKEN: 'Broken' }[p.status];
+  const statusLabel = { AVAILABLE: 'Available', IN_USE: 'In Use', BROKEN: 'Broken' , IN_SHIPMENT: 'In shipment'}[p.status];
   const typeOptions = allTypes.map(t =>
     `<option value="${escapeAttr(t.name)}" ${t.name === p.type ? 'selected' : ''}>${escapeHtml(t.name)}</option>`
   ).join('');
@@ -149,6 +150,7 @@ function renderTag(p) {
             <option value="AVAILABLE" ${p.status==='AVAILABLE'?'selected':''}>Available</option>
             <option value="IN_USE" ${p.status==='IN_USE'?'selected':''}>In Use</option>
             <option value="BROKEN" ${p.status==='BROKEN'?'selected':''}>Broken</option>
+            <option value="IN_SHIPMENT" ${p.status==='IN_SHIPMENT'?'selected':''}>In shipment</option>
           </select>
         </div>
         <div class="field">

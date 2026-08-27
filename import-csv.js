@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const db = require('./db/database');
+const { logChange } = require('./log');
 
 const DEFAULT_TAG = 'Misc';
 const VALID_STATUSES = new Set(['AVAILABLE', 'IN_USE', 'BROKEN', 'IN_SHIPMENT']);
@@ -63,10 +65,12 @@ function importCsvText(csvText) {
   const insertType = db.prepare('INSERT OR IGNORE INTO types (name) VALUES (?)');
   const findType = db.prepare('SELECT id FROM types WHERE name = ? COLLATE NOCASE');
   const insertPart = db.prepare(
-    'INSERT INTO parts (name, quantity, status, type_id) VALUES (?, ?, ?, ?)'
+    'INSERT INTO parts (name, quantity, status, type_id, batch_id) VALUES (?, ?, ?, ?, ?)'
   );
+  const batchId = crypto.randomUUID();
 
   const importTransaction = db.transaction((dataRows) => {
+    db.prepare('INSERT INTO import_batches (id, item_count) VALUES (?, ?)').run(batchId, dataRows.length);
     for (const [offset, values] of dataRows.entries()) {
       const rowNumber = offset + 2;
       const name = (values[nameColumn] || '').trim();
@@ -86,12 +90,14 @@ function importCsvText(csvText) {
 
       insertType.run(tag);
       const type = findType.get(tag);
-      insertPart.run(name, quantity, status, type.id);
+      insertPart.run(name, quantity, status, type.id, batchId);
     }
     return dataRows.length;
   });
 
-  return importTransaction(rows.slice(1));
+  const imported = importTransaction(rows.slice(1));
+  logChange('import.completed', { batchId, imported });
+  return { imported, batchId };
 }
 
 function importCsv(fileName) {
@@ -105,7 +111,8 @@ if (require.main === module) {
     process.exitCode = 1;
   } else {
     try {
-      console.log(`Imported ${importCsv(fileName)} part(s) from ${fileName}`);
+      const result = importCsv(fileName);
+      console.log(`Imported ${result.imported} part(s) from ${fileName} as batch ${result.batchId}`);
     } catch (error) {
       console.error(`Import failed: ${error.message}`);
       process.exitCode = 1;

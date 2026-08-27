@@ -16,6 +16,14 @@ db.exec(`
 `);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS import_batches (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    item_count INTEGER NOT NULL DEFAULT 0
+  )
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS parts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -51,6 +59,12 @@ const hasTypeId = columns.some((c) => c.name === 'type_id');
 if (!hasTypeId) {
   db.exec('ALTER TABLE parts ADD COLUMN type_id INTEGER REFERENCES types(id)');
   console.log('Migrated: added type_id column to parts table');
+}
+
+const hasBatchId = columns.some((c) => c.name === 'batch_id');
+if (!hasBatchId) {
+  db.exec('ALTER TABLE parts ADD COLUMN batch_id TEXT REFERENCES import_batches(id)');
+  console.log('Migrated: added batch_id column to parts table');
 }
 
 // --- Seed some common starter types (only runs once, when table is empty) ---

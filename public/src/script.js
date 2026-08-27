@@ -9,10 +9,13 @@ const addError = document.getElementById('addError');
 const importPanel = document.getElementById('importPanel');
 const importError = document.getElementById('importError');
 const searchInput = document.getElementById('searchInput');
+const clearSearchBtn = document.getElementById('clearSearchBtn');
 const tagModal = document.getElementById('tagModal');
 const modalTagList = document.getElementById('modalTagList');
 const splitModal = document.getElementById('splitModal');
 const splitError = document.getElementById('splitError');
+const batchModal = document.getElementById('batchModal');
+const batchList = document.getElementById('batchList');
 let splitPartId = null;
 
 // ---------- Data loading ----------
@@ -54,6 +57,75 @@ async function loadParts() {
     }
   }
   renderParts();
+}
+
+async function loadBatches() {
+  const res = await fetch(`${API}/import/batches`);
+  if (!res.ok) throw new Error('Could not load imported shipments.');
+  renderBatches(await res.json());
+}
+
+function renderBatches(batches) {
+  if (batches.length === 0) {
+    batchList.innerHTML = '<div class="empty-state">No CSV shipments imported yet.</div>';
+    return;
+  }
+
+  batchList.innerHTML = batches.map(batch => `
+    <div class="batch-item" data-batch-id="${escapeAttr(batch.id)}">
+      <div class="batch-info">
+        <strong>${escapeHtml(batch.first_part || 'Imported shipment')}</strong>
+        <span>${batch.item_count} part(s) · ${escapeHtml(new Date(`${batch.created_at}Z`).toLocaleString())}</span>
+        <code>${escapeHtml(batch.id)}</code>
+      </div>
+      <div class="batch-actions">
+        <select class="batch-status" aria-label="Shipment status">
+          ${['IN_SHIPMENT', 'AVAILABLE', 'BROKEN'].map(status => `<option value="${status}">${status.replace('_', ' ')}</option>`).join('')}
+        </select>
+        <button class="secondary batch-update-btn" type="button">Set status</button>
+        <button class="delete batch-delete-btn" type="button">Delete all</button>
+      </div>
+    </div>
+  `).join('');
+
+  batches.forEach(batch => {
+    const item = batchList.querySelector(`[data-batch-id="${batch.id}"]`);
+    const statusSelect = item.querySelector('.batch-status');
+    const statuses = (batch.statuses || '').split(',');
+    if (statuses.length === 1 && statuses[0]) statusSelect.value = statuses[0];
+    item.querySelector('.batch-update-btn').addEventListener('click', () => updateBatchStatus(batch.id, statusSelect.value));
+    item.querySelector('.batch-delete-btn').addEventListener('click', () => deleteBatch(batch.id));
+  });
+}
+
+function openBatchModal() {
+  batchModal.classList.add('open');
+  loadBatches().catch(error => { batchList.innerHTML = `<div class="error-msg show">${escapeHtml(error.message)}</div>`; });
+}
+
+function closeBatchModal() { batchModal.classList.remove('open'); }
+
+async function updateBatchStatus(batchId, status) {
+  const res = await fetch(`${API}/import/batches/${encodeURIComponent(batchId)}/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+  const result = await res.json();
+  if (!res.ok) throw new Error(result.error || 'Could not update shipment.');
+  await loadParts();
+  await loadBatches();
+}
+
+async function deleteBatch(batchId) {
+  if (!confirm('Delete every part from this imported shipment? This cannot be undone.')) return;
+  const res = await fetch(`${API}/import/batches/${encodeURIComponent(batchId)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const result = await res.json();
+    throw new Error(result.error || 'Could not delete shipment.');
+  }
+  await loadParts();
+  await loadBatches();
 }
 
 // ---------- Tag Manager Modal ----------
@@ -114,11 +186,16 @@ function renderParts() {
   tagGrid.innerHTML = filtered.map(renderTag).join('');
 
   filtered.forEach(p => {
+    document.getElementById(`menu-btn-${p.id}`).addEventListener('click', () => toggleItemMenu(p.id));
     document.getElementById(`edit-btn-${p.id}`).addEventListener('click', () => toggleEdit(p.id, true));
     document.getElementById(`split-btn-${p.id}`).addEventListener('click', () => openSplitModal(p));
     document.getElementById(`cancel-btn-${p.id}`).addEventListener('click', () => toggleEdit(p.id, false));
     document.getElementById(`save-btn-${p.id}`).addEventListener('click', () => saveEdit(p.id));
     document.getElementById(`delete-btn-${p.id}`).addEventListener('click', () => deletePart(p.id, p.name));
+    document.querySelector(`[data-quantity-target="edit-qty-${p.id}"][data-quantity-change="-1"]`)
+      .addEventListener('click', () => changeQuantity(`edit-qty-${p.id}`, -1));
+    document.querySelector(`[data-quantity-target="edit-qty-${p.id}"][data-quantity-change="1"]`)
+      .addEventListener('click', () => changeQuantity(`edit-qty-${p.id}`, 1));
   });
 }
 
@@ -142,15 +219,28 @@ function renderTag(p) {
         </div>
         <div class="tag-location">📍 ${p.location ? escapeHtml(p.location) : 'Unassigned'}</div>
         <div class="tag-actions">
-          <button id="edit-btn-${p.id}">Edit</button>
-          <button id="split-btn-${p.id}">Split</button>
-          <button class="delete" id="delete-btn-${p.id}">Delete</button>
+          <div class="item-menu">
+            <button class="menu-btn" id="menu-btn-${p.id}" type="button" aria-label="More actions">⋮</button>
+            <div class="item-menu-popup" id="menu-${p.id}">
+              <button id="edit-btn-${p.id}" type="button">Edit</button>
+              <button id="split-btn-${p.id}" type="button">Split</button>
+              <button class="delete" id="delete-btn-${p.id}" type="button">Delete</button>
+            </div>
+          </div>
         </div>
       </div>
       <div class="edit-mode">
         <div class="field">
+          <label>Name</label>
+          <input type="text" id="edit-name-${p.id}" value="${escapeAttr(p.name)}">
+        </div>
+        <div class="field">
           <label>Quantity</label>
-          <input type="number" min="0" id="edit-qty-${p.id}" value="${p.quantity}">
+          <div class="quantity-stepper">
+            <button type="button" class="quantity-btn" data-quantity-target="edit-qty-${p.id}" data-quantity-change="-1" aria-label="Decrease quantity">−</button>
+            <input type="number" min="0" id="edit-qty-${p.id}" value="${p.quantity}">
+            <button type="button" class="quantity-btn" data-quantity-target="edit-qty-${p.id}" data-quantity-change="1" aria-label="Increase quantity">+</button>
+          </div>
         </div>
         <div class="field">
           <label>Status</label>
@@ -180,6 +270,19 @@ function renderTag(p) {
 
 function toggleEdit(id, on) {
   document.getElementById(`tag-${id}`).classList.toggle('editing', on);
+}
+
+function toggleItemMenu(id) {
+  document.querySelectorAll('.item-menu-popup.open').forEach(menu => {
+    if (menu.id !== `menu-${id}`) menu.classList.remove('open');
+  });
+  document.getElementById(`menu-${id}`).classList.toggle('open');
+}
+
+function changeQuantity(inputId, change) {
+  const input = document.getElementById(inputId);
+  const quantity = Math.max(0, Number(input.value) || 0);
+  input.value = quantity + change;
 }
 
 function openSplitModal(part) {
@@ -231,6 +334,7 @@ async function submitSplit() {
 // ---------- Mutations ----------
 async function saveEdit(id) {
   const body = {
+    name: document.getElementById(`edit-name-${id}`).value.trim(),
     quantity: Number(document.getElementById(`edit-qty-${id}`).value),
     status: document.getElementById(`edit-status-${id}`).value,
     location: document.getElementById(`edit-location-${id}`).value || null,
@@ -338,6 +442,7 @@ async function submitCsvImport() {
     closeImportPanel();
     await loadTypes();
     await loadParts();
+    await loadBatches();
     alert(`Imported ${result.imported} part(s).`);
   } catch (error) {
     importError.textContent = error.message;
@@ -363,6 +468,8 @@ async function addNewType() {
     allTypes.push({ id: Date.now(), name: trimmed });
     await loadTypes(trimmed);
   }
+
+  renderParts();
 }
 
 // ---------- Panel & Modal controls ----------
@@ -393,6 +500,20 @@ document.getElementById('filterPills').addEventListener('click', (e) => {
 });
 
 searchInput.addEventListener('input', () => {
+  clearSearchBtn.classList.toggle('visible', searchInput.value.length > 0);
+  renderParts();
+});
+
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('.item-menu')) {
+    document.querySelectorAll('.item-menu-popup.open').forEach(menu => menu.classList.remove('open'));
+  }
+});
+
+clearSearchBtn.addEventListener('click', () => {
+  searchInput.value = '';
+  clearSearchBtn.classList.remove('visible');
+  searchInput.focus();
   renderParts();
 });
 
@@ -408,7 +529,13 @@ function escapeAttr(str) { return escapeHtml(str); }
 document.getElementById('togglePanelBtn').addEventListener('click', openPanel);
 document.getElementById('cancelAddBtn').addEventListener('click', closePanel);
 document.getElementById('submitAddBtn').addEventListener('click', submitNewPart);
+document.querySelectorAll('[data-quantity-target="f-quantity"]').forEach(button => {
+  button.addEventListener('click', () => changeQuantity(
+    'f-quantity', Number(button.dataset.quantityChange)
+  ));
+});
 document.getElementById('toggleImportBtn').addEventListener('click', openImportPanel);
+document.getElementById('manageBatchesBtn').addEventListener('click', openBatchModal);
 document.getElementById('cancelImportBtn').addEventListener('click', closeImportPanel);
 document.getElementById('submitImportBtn').addEventListener('click', submitCsvImport);
 document.getElementById('newTypeBtn').addEventListener('click', addNewType);
@@ -420,9 +547,12 @@ document.getElementById('closeTagModalGhostBtn').addEventListener('click', close
 document.getElementById('closeSplitModalBtn').addEventListener('click', closeSplitModal);
 document.getElementById('cancelSplitBtn').addEventListener('click', closeSplitModal);
 document.getElementById('submitSplitBtn').addEventListener('click', submitSplit);
+document.getElementById('closeBatchModalBtn').addEventListener('click', closeBatchModal);
+document.getElementById('closeBatchModalGhostBtn').addEventListener('click', closeBatchModal);
 
 // ---------- Init ----------
 (async function init() {
   await loadTypes();
   await loadParts();
+  await loadBatches();
 })();

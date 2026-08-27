@@ -2,6 +2,7 @@
 const express = require('express');
 const db = require('./db/database');
 const { importCsvText } = require('./import-csv');
+const { logChange } = require('./log');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,8 +16,8 @@ app.post('/api/import/csv', (req, res) => {
   }
 
   try {
-    const imported = importCsvText(req.body.csv);
-    res.status(201).json({ imported });
+    const result = importCsvText(req.body.csv);
+    res.status(201).json(result);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -52,6 +53,39 @@ app.get('/api/types', (req, res) => {
   res.json(db.prepare('SELECT * FROM types ORDER BY name').all());
 });
 
+app.get('/api/import/batches', (req, res) => {
+  res.json(db.prepare(`
+    SELECT import_batches.*, MIN(parts.name) AS first_part,
+      GROUP_CONCAT(DISTINCT parts.status) AS statuses
+    FROM import_batches
+    LEFT JOIN parts ON parts.batch_id = import_batches.id
+    GROUP BY import_batches.id
+    ORDER BY import_batches.created_at DESC
+  `).all());
+});
+
+app.patch('/api/import/batches/:id/status', (req, res) => {
+  const { status } = req.body;
+  if (!VALID_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `status must be one of ${VALID_STATUSES.join(', ')}` });
+  }
+  const info = db.prepare('UPDATE parts SET status = ? WHERE batch_id = ?').run(status, req.params.id);
+  if (info.changes === 0) return res.status(404).json({ error: 'Import batch not found' });
+  logChange('import.batch.status_updated', { batchId: req.params.id, status, updated: info.changes });
+  res.json({ batchId: req.params.id, status, updated: info.changes });
+});
+
+app.delete('/api/import/batches/:id', (req, res) => {
+  const deleteBatch = db.transaction((batchId) => {
+    const parts = db.prepare('DELETE FROM parts WHERE batch_id = ?').run(batchId);
+    const batch = db.prepare('DELETE FROM import_batches WHERE id = ?').run(batchId);
+    return parts.changes && batch.changes;
+  });
+  if (!deleteBatch(req.params.id)) return res.status(404).json({ error: 'Import batch not found' });
+  logChange('import.batch.deleted', { batchId: req.params.id });
+  res.status(204).send();
+});
+
 app.post('/api/types', (req, res) => {
   const { name } = req.body;
   if (!name || typeof name !== 'string' || !name.trim()) {
@@ -59,7 +93,9 @@ app.post('/api/types', (req, res) => {
   }
   try {
     const info = db.prepare('INSERT INTO types (name) VALUES (?)').run(name.trim());
-    res.status(201).json(db.prepare('SELECT * FROM types WHERE id = ?').get(info.lastInsertRowid));
+    const type = db.prepare('SELECT * FROM types WHERE id = ?').get(info.lastInsertRowid);
+    logChange('type.created', { id: type.id, name: type.name });
+    res.status(201).json(type);
   } catch (err) {
     if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       return res.status(409).json({ error: `Type "${name}" already exists` });
@@ -83,7 +119,7 @@ app.delete('/api/types/:id', (req, res) => {
   if (changes === 0) {
     return res.status(404).json({ error: 'Type not found' });
   }
-  
+  logChange('type.deleted', { id: typeId });
   res.status(204).send();
 });
 
@@ -110,7 +146,9 @@ app.post('/api/parts', (req, res) => {
     .prepare('INSERT INTO parts (name, quantity, status, location, type_id) VALUES (?, ?, ?, ?, ?)')
     .run(name, qty, finalStatus, location || null, typeResult.typeId);
 
-  res.status(201).json(db.prepare(`${PART_SELECT} WHERE parts.id = ?`).get(info.lastInsertRowid));
+  const part = db.prepare(`${PART_SELECT} WHERE parts.id = ?`).get(info.lastInsertRowid);
+  logChange('part.created', { id: part.id, name: part.name, quantity: part.quantity, status: part.status, type: part.type });
+  res.status(201).json(part);
 });
 
 app.get('/api/parts', (req, res) => {
@@ -129,6 +167,9 @@ app.put('/api/parts/:id', (req, res) => {
 
   const { name, quantity, status, location, type } = req.body;
 
+  if (name !== undefined && (typeof name !== 'string' || !name.trim())) {
+    return res.status(400).json({ error: 'name must be a non-empty string' });
+  }
   if (status !== undefined && !VALID_STATUSES.includes(status)) {
     return res.status(400).json({ error: `status must be one of ${VALID_STATUSES.join(', ')}` });
   }
@@ -162,14 +203,18 @@ app.put('/api/parts/:id', (req, res) => {
       db.prepare('DELETE FROM parts WHERE id = ?').run(req.params.id);
       return db.prepare(`${PART_SELECT} WHERE parts.id = ?`).get(mergeTarget.id);
     });
-    return res.json({ merged: true, part: mergeTransaction() });
+    const mergedPart = mergeTransaction();
+    logChange('part.updated.merged', { removedId: req.params.id, id: mergedPart.id, name: mergedPart.name, quantity: mergedPart.quantity, status: mergedPart.status, type: mergedPart.type });
+    return res.json({ merged: true, part: mergedPart });
   }
 
   db.prepare(
     'UPDATE parts SET name = ?, quantity = ?, status = ?, location = ?, type_id = ? WHERE id = ?'
   ).run(updated.name, updated.quantity, updated.status, updated.location, typeId, req.params.id);
 
-  res.json({ merged: false, part: db.prepare(`${PART_SELECT} WHERE parts.id = ?`).get(req.params.id) });
+  const part = db.prepare(`${PART_SELECT} WHERE parts.id = ?`).get(req.params.id);
+  logChange('part.updated', { id: part.id, name: part.name, quantity: part.quantity, status: part.status, type: part.type });
+  res.json({ merged: false, part });
 });
 
 app.post('/api/parts/:id/split', (req, res) => {
@@ -198,20 +243,23 @@ app.post('/api/parts/:id/split', (req, res) => {
   const splitTransaction = db.transaction(() => {
     db.prepare('UPDATE parts SET quantity = quantity - ? WHERE id = ?').run(quantity, req.params.id);
     const info = db.prepare(
-      'INSERT INTO parts (name, quantity, status, location, type_id) VALUES (?, ?, ?, ?, ?)'
-    ).run(existing.name, quantity, status, location || null, typeId);
+      'INSERT INTO parts (name, quantity, status, location, type_id, batch_id) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(existing.name, quantity, status, location || null, typeId, existing.batch_id);
     return {
       source: db.prepare(`${PART_SELECT} WHERE parts.id = ?`).get(req.params.id),
       created: db.prepare(`${PART_SELECT} WHERE parts.id = ?`).get(info.lastInsertRowid),
     };
   });
 
-  res.status(201).json(splitTransaction());
+  const result = splitTransaction();
+  logChange('part.split', { sourceId: result.source.id, createdId: result.created.id, name: result.created.name, quantity: result.created.quantity, status: result.created.status, type: result.created.type });
+  res.status(201).json(result);
 });
 
 app.delete('/api/parts/:id', (req, res) => {
   const info = db.prepare('DELETE FROM parts WHERE id = ?').run(req.params.id);
   if (info.changes === 0) return res.status(404).json({ error: 'Part not found' });
+  logChange('part.deleted', { id: req.params.id });
   res.status(204).send();
 });
 

@@ -54,6 +54,25 @@ app.post('/api/types', (req, res) => {
   }
 });
 
+// --- ADDED: DELETE a type by ID ---
+app.delete('/api/types/:id', (req, res) => {
+  const typeId = req.params.id;
+  
+  // Use a transaction to safely unassign parts and delete the tag
+  const deleteTypeTx = db.transaction((id) => {
+    db.prepare('UPDATE parts SET type_id = NULL WHERE type_id = ?').run(id);
+    const info = db.prepare('DELETE FROM types WHERE id = ?').run(id);
+    return info.changes;
+  });
+
+  const changes = deleteTypeTx(typeId);
+  if (changes === 0) {
+    return res.status(404).json({ error: 'Type not found' });
+  }
+  
+  res.status(204).send();
+});
+
 // ===== PARTS =====
 
 app.post('/api/parts', (req, res) => {
@@ -132,4 +151,4 @@ app.delete('/api/parts/:id', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Inventory server running at http://localhost:${PORT}`);
-}); 
+});

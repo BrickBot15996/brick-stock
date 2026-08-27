@@ -1,8 +1,11 @@
 {
   "name": "brick-stock",
   "version": "1.0.0",
-  "description": "Lightweight parts inventory tracker for the robotics club",
+  "description": "Lightweight parts inventory tracker for #15996 FTC Team",
   "main": "server.js",
+  "bin": {
+    "stock": "./stock.js"
+  },
   "scripts": {
     "start": "node server.js",
     "test": "echo \"Error: no test specified\" && exit 1"

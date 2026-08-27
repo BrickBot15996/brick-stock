@@ -41,7 +41,7 @@ if (typeCount === 0) {
   const seedTypes = db.transaction((names) => {
     names.forEach((n) => insertType.run(n));
   });
-  seedTypes(['Motor', 'Servo', 'Sensor', 'Microcontroller', 'Structural', 'Electronic', 'Misc']);
+  seedTypes(['Motor', 'Servo', 'Rev Control', 'Misc']);
   console.log('Seeded default types');
 }
 

@@ -131,6 +131,7 @@ app.post('/api/parts', (req, res) => {
   if (!name || typeof name !== 'string') {
     return res.status(400).json({ error: 'name is required and must be a string' });
   }
+  const trimmedName = name.trim();
   const qty = quantity === undefined ? 0 : Number(quantity);
   if (!Number.isInteger(qty) || qty < 0) {
     return res.status(400).json({ error: 'quantity must be a non-negative integer' });
@@ -142,13 +143,35 @@ app.post('/api/parts', (req, res) => {
   const typeResult = resolveTypeId(type);
   if (!typeResult.ok) return res.status(400).json({ error: typeResult.error });
 
+  const existingMatch = db.prepare(
+    `SELECT * FROM parts
+     WHERE name = ? COLLATE NOCASE AND status = ? AND type_id IS ?`
+  ).get(trimmedName, finalStatus, typeResult.typeId);
+
+  if (existingMatch) {
+    const mergedPart = db.transaction(() => {
+      db.prepare('UPDATE parts SET quantity = quantity + ? WHERE id = ?').run(qty, existingMatch.id);
+      return db.prepare(`${PART_SELECT} WHERE parts.id = ?`).get(existingMatch.id);
+    })();
+
+    logChange('part.created.merged', {
+      id: mergedPart.id,
+      name: mergedPart.name,
+      quantity: mergedPart.quantity,
+      status: mergedPart.status,
+      type: mergedPart.type,
+    });
+
+    return res.status(201).json({ merged: true, part: mergedPart });
+  }
+
   const info = db
     .prepare('INSERT INTO parts (name, quantity, status, location, type_id) VALUES (?, ?, ?, ?, ?)')
-    .run(name, qty, finalStatus, location || null, typeResult.typeId);
+    .run(trimmedName, qty, finalStatus, location || null, typeResult.typeId);
 
   const part = db.prepare(`${PART_SELECT} WHERE parts.id = ?`).get(info.lastInsertRowid);
   logChange('part.created', { id: part.id, name: part.name, quantity: part.quantity, status: part.status, type: part.type });
-  res.status(201).json(part);
+  res.status(201).json({ merged: false, part });
 });
 
 app.get('/api/parts', (req, res) => {

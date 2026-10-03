@@ -399,7 +399,20 @@ async function submitNewPart() {
       body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error('API error');
-    allParts.push(await res.json());
+
+    const result = await res.json();
+    const createdPart = result.part || result;
+
+    if (result.merged) {
+      const existingIndex = allParts.findIndex(p => p.id === createdPart.id);
+      if (existingIndex !== -1) {
+        allParts[existingIndex] = createdPart;
+      } else {
+        allParts.push(createdPart);
+      }
+    } else {
+      allParts.push(createdPart);
+    }
   } catch (e) {
     payload.id = Date.now();
     allParts.push(payload);
